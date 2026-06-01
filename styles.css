@@ -528,11 +528,10 @@ h1 {
   background: #17231f;
 }
 
-[data-theme="dark"] .leaflet-tile {
-  filter: brightness(.72) contrast(1.1) saturate(.82);
+[data-theme="dark"] .leaflet-container {
+  background: #e9efe3;
 }
 
-[data-theme="dark"] .leaflet-container,
 [data-theme="dark"] .leaflet-popup-content-wrapper,
 [data-theme="dark"] .leaflet-popup-tip {
   background: #17231f;
