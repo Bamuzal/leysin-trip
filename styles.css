@@ -457,7 +457,7 @@ h1 {
   border-radius: 999px;
   border: 1px solid var(--line);
   background: #e6ddd0;
-  color: #101917;
+  color: #fff;
   font-size: 13px;
   font-weight: 900;
   white-space: nowrap;
@@ -468,7 +468,7 @@ h1 {
 }
 
 .filter-dining { background: #c84532; border-color: #c84532; }
-.filter-bars { background: #20313b; border-color: #20313b; color: #fff; }
+.filter-bars { background: #20313b; border-color: #20313b; }
 .filter-activities { background: #246f8f; border-color: #246f8f; }
 .filter-parks, .filter-hiking { background: #527a54; border-color: #527a54; }
 .filter-biking { background: #246f8f; border-color: #246f8f; }
