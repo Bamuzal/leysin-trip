@@ -584,7 +584,7 @@ function renderHomeFilterStatus() {
       ? el("span", { class: "mini red" }, [`Selected: ${selected.name}`])
       : homesActive
       ? el("span", { class: "mini blue" }, ["Homes: Mosse base + Corbelets 43"])
-      : el("span", { class: "mini" }, ["Tap the Homes filter to focus local options, or tap either home pin for its Google Maps link"]),
+      : el("span"),
     selected
       ? el("button", { class: "origin-clear", onclick: clearSelectedListing }, ["Clear selection"])
       : homesActive
