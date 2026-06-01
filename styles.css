@@ -238,7 +238,6 @@ h1 {
 [data-theme="dark"] input,
 [data-theme="dark"] select,
 [data-theme="dark"] textarea,
-[data-theme="dark"] .filter-chip,
 [data-theme="dark"] .origin-clear,
 [data-theme="dark"] .popup-actions button,
 [data-theme="dark"] .popup-actions a,
@@ -457,33 +456,30 @@ h1 {
   padding: 0 12px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: white;
-  color: var(--muted);
+  background: #e6ddd0;
+  color: #101917;
   font-size: 13px;
   font-weight: 900;
   white-space: nowrap;
 }
 
-.filter-chip.active { color: white; border-color: var(--green); background: var(--green); }
+.filter-chip.active {
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.8), 0 8px 18px rgba(23,51,45,.18);
+}
 
-.filter-dining { border-color: #c84532; color: #c84532; }
-.filter-bars { border-color: #20313b; color: #20313b; }
-.filter-activities { border-color: #246f8f; color: #246f8f; }
-.filter-parks, .filter-hiking { border-color: #527a54; color: #527a54; }
-.filter-biking { border-color: #246f8f; color: #246f8f; }
-.filter-castles { border-color: #8d6b58; color: #8d6b58; }
-.filter-wine { border-color: #8b3d39; color: #8b3d39; }
-.filter-homes { border-color: #1f75d6; color: #1f75d6; }
-.filter-rainy, .filter-clear, .filter-moderate { border-color: var(--gold); color: #8a6720; }
+.filter-dining { background: #c84532; border-color: #c84532; }
+.filter-bars { background: #20313b; border-color: #20313b; color: #fff; }
+.filter-activities { background: #246f8f; border-color: #246f8f; }
+.filter-parks, .filter-hiking { background: #527a54; border-color: #527a54; }
+.filter-biking { background: #246f8f; border-color: #246f8f; }
+.filter-castles { background: #8d6b58; border-color: #8d6b58; }
+.filter-wine { background: #8b3d39; border-color: #8b3d39; }
+.filter-homes { background: #1f75d6; border-color: #1f75d6; }
+.filter-rainy, .filter-clear, .filter-moderate { background: var(--gold); border-color: var(--gold); }
 
-.filter-dining.active { background: #c84532; border-color: #c84532; }
-.filter-bars.active { background: #20313b; border-color: #20313b; }
-.filter-activities.active, .filter-biking.active { background: #246f8f; border-color: #246f8f; }
-.filter-parks.active, .filter-hiking.active { background: #527a54; border-color: #527a54; }
-.filter-castles.active { background: #8d6b58; border-color: #8d6b58; }
-.filter-wine.active { background: #8b3d39; border-color: #8b3d39; }
-.filter-homes.active { background: #1f75d6; border-color: #1f75d6; }
-.filter-rainy.active, .filter-clear.active, .filter-moderate.active { background: var(--gold); border-color: var(--gold); }
+[data-theme="dark"] .filter-chip {
+  color: #fff;
+}
 
 .origin-status {
   display: flex;
