@@ -217,6 +217,7 @@ let state = {
   search: "",
   effort: "all",
   selectedDay: "2026-06-20",
+  theme: readStore("leysin_theme", "light"),
   saved: readStore("leysin_saved", []),
   itinerary: readStore("leysin_itinerary", seedItinerary)
 };
@@ -291,6 +292,7 @@ function readStore(key, fallback) {
 }
 
 function writeStore() {
+  localStorage.setItem("leysin_theme", JSON.stringify(state.theme));
   localStorage.setItem("leysin_saved", JSON.stringify(state.saved));
   localStorage.setItem("leysin_itinerary", JSON.stringify(state.itinerary));
 }
@@ -340,6 +342,7 @@ function el(tag, attrs = {}, children = []) {
 function render() {
   rememberMapView();
   rememberItineraryDayScroll();
+  document.documentElement.dataset.theme = state.theme;
   const app = document.getElementById("app");
   app.innerHTML = "";
   app.append(
@@ -369,6 +372,7 @@ function restoreItineraryDayScroll() {
 }
 
 function renderHeader() {
+  const isDark = state.theme === "dark";
   return el("header", { class: "topbar" }, [
     el("div", { class: "topbar-inner" }, [
       el("div", { class: "brand-line" }, [
@@ -380,6 +384,12 @@ function renderHeader() {
           ])
         ]),
         el("div", { class: "weather-pill" }, ["☀️", el("span", {}, ["18°C Leysin"])]),
+        el("button", {
+          class: "theme-toggle",
+          type: "button",
+          "aria-pressed": isDark ? "true" : "false",
+          onclick: toggleTheme
+        }, [isDark ? "Light" : "Dark"]),
         el("button", { class: "print-button", onclick: () => window.print() }, ["Print / PDF"])
       ]),
       el("nav", { class: "tabs", "aria-label": "Dashboard tabs" },
@@ -395,6 +405,12 @@ function renderHeader() {
       )
     ])
   ]);
+}
+
+function toggleTheme() {
+  state.theme = state.theme === "dark" ? "light" : "dark";
+  writeStore();
+  render();
 }
 
 function renderActiveTab() {
