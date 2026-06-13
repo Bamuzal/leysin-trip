@@ -337,17 +337,28 @@ function applySnapshot(snapshot) {
 function maybeLoadSharedState() {
   try {
     const hash = (typeof location !== "undefined" && location.hash) || "";
-    const match = hash.match(/[#&]trip=([^&]+)/);
-    if (!match) return;
-    const snapshot = decodeTrip(decodeURIComponent(match[1]));
-    if (snapshot && Array.isArray(snapshot.itinerary) &&
-        confirm("This link contains a shared itinerary. Load it? This replaces the plan saved in this browser.")) {
-      applySnapshot(snapshot);
+    const tripMatch = hash.match(/[#&]trip=([^&]+)/);
+    const aiMatch = hash.match(/[#&]ai=([^&]+)/);
+    if (tripMatch) {
+      const snapshot = decodeTrip(decodeURIComponent(tripMatch[1]));
+      if (snapshot && Array.isArray(snapshot.itinerary) &&
+          confirm("This link contains a shared itinerary. Load it? This replaces the plan saved in this browser.")) {
+        applySnapshot(snapshot);
+      }
+    }
+    if (aiMatch) {
+      const config = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(aiMatch[1])))));
+      if (config && config.url &&
+          confirm("This link will connect the Claude assistant on this device. Continue?")) {
+        state.aiProxyUrl = config.url;
+        state.aiPass = config.pass || "";
+        saveAiConfig();
+      }
     }
     // Clear the hash either way so a refresh doesn't re-prompt.
-    history.replaceState(null, "", location.pathname + location.search);
+    if (tripMatch || aiMatch) history.replaceState(null, "", location.pathname + location.search);
   } catch (error) {
-    console.warn("Could not read shared itinerary from link.", error);
+    console.warn("Could not read shared settings from link.", error);
   }
 }
 
@@ -397,6 +408,21 @@ const ASSISTANT_MODEL = "claude-haiku-4-5-20251001";
 function saveAiConfig() {
   localStorage.setItem("leysin_ai_proxy", JSON.stringify(state.aiProxyUrl));
   localStorage.setItem("leysin_ai_pass", JSON.stringify(state.aiPass));
+}
+
+async function copyInviteLink() {
+  if (!state.aiProxyUrl) {
+    alert("Connect the assistant first, then you can create an invite link.");
+    return;
+  }
+  const encoded = btoa(unescape(encodeURIComponent(JSON.stringify({ url: state.aiProxyUrl, pass: state.aiPass }))));
+  const link = `${location.origin + location.pathname}#ai=${encodeURIComponent(encoded)}`;
+  try {
+    await navigator.clipboard.writeText(link);
+    alert("Assistant invite link copied. Send it privately to family — opening it connects their device to the assistant, no setup needed.");
+  } catch {
+    prompt("Copy this assistant invite link (send privately):", link);
+  }
 }
 
 function openAssistant() {
@@ -612,7 +638,13 @@ function renderAssistantSettings() {
     el("div", { class: "listing-actions" }, [
       el("button", { class: "primary-btn", type: "submit" }, ["Save"]),
       state.aiProxyUrl ? el("button", { class: "ghost-btn", type: "button", onclick: () => { state.assistantSettings = false; render(); } }, ["Cancel"]) : el("span")
-    ])
+    ]),
+    state.aiProxyUrl
+      ? el("div", { class: "invite-block" }, [
+          el("p", { class: "muted small" }, ["Share access without setup: send family this link and the assistant connects on their device automatically."]),
+          el("button", { class: "ghost-btn", type: "button", onclick: copyInviteLink }, ["Copy invite link for family"])
+        ])
+      : el("span")
   ]);
 }
 
