@@ -235,8 +235,8 @@ let state = {
   aiPass: readStore("leysin_ai_pass", "")
 };
 let sharedNotice = "";
-const loadedSharedPlan = maybeLoadSharedState();
-if (!loadedSharedPlan) backfillSeedItinerary();
+// Note: maybeLoadSharedState() + backfill run at the very bottom of this file,
+// after LZString and the share decoders are defined (a #plan= link needs them).
 
 let map;
 let markerLayer;
@@ -2241,6 +2241,11 @@ window.tripHubActions = {
     if (place) openAddModal(place.id);
   }
 };
+
+// Apply a shared plan / assistant invite from the link now that LZString and the
+// decoders above are defined, then fall back to seeding, then render once.
+const loadedSharedPlan = maybeLoadSharedState();
+if (!loadedSharedPlan) backfillSeedItinerary();
 
 render();
 // End of Leysin Trip Hub app.
