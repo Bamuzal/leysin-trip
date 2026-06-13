@@ -224,7 +224,15 @@ let state = {
   selectedDay: "2026-06-20",
   theme: readStore("leysin_theme", "light"),
   saved: readStore("leysin_saved", []),
-  itinerary: readStore("leysin_itinerary", seedItinerary)
+  itinerary: readStore("leysin_itinerary", seedItinerary),
+  assistantOpen: false,
+  assistantBusy: false,
+  assistantError: "",
+  assistantSettings: false,
+  assistantMessages: [],
+  assistantPending: null,
+  aiProxyUrl: readStore("leysin_ai_proxy", ""),
+  aiPass: readStore("leysin_ai_pass", "")
 };
 maybeLoadSharedState();
 backfillSeedItinerary();
@@ -383,6 +391,289 @@ async function copyShareLink() {
   }
 }
 
+// ---- Claude assistant (via serverless proxy) --------------------------
+const ASSISTANT_MODEL = "claude-haiku-4-5-20251001";
+
+function saveAiConfig() {
+  localStorage.setItem("leysin_ai_proxy", JSON.stringify(state.aiProxyUrl));
+  localStorage.setItem("leysin_ai_pass", JSON.stringify(state.aiPass));
+}
+
+function openAssistant() {
+  state.assistantOpen = true;
+  state.assistantError = "";
+  state.assistantSettings = !state.aiProxyUrl;
+  render();
+}
+
+function closeAssistant() {
+  state.assistantOpen = false;
+  state.assistantPending = null;
+  render();
+}
+
+function buildAssistantSystem() {
+  const days = tripDays.map((d) => `${d.date} (${d.short}): ${d.title}`).join("; ");
+  const itinerary = state.itinerary
+    .slice()
+    .sort((a, b) => (a.day + a.start).localeCompare(b.day + b.start))
+    .map((e) => `${e.id} | ${e.day} ${e.start}-${e.end} | ${e.title} | ${e.category} | ${e.status}${e.listingId ? ` | place:${e.listingId}` : ""}`)
+    .join("\n");
+  const places = listings
+    .map((l) => `${l.id} | ${l.name} | ${categoryLabels[l.category] || l.category} | ${l.area} | ${l.price}`)
+    .join("\n");
+  return [
+    "You are the trip-planning assistant inside the Leysin Trip Hub, a family trip to Leysin, Switzerland on June 20-30, 2026.",
+    'Respond with STRICT minified JSON only, no markdown or prose outside it: {"reply": string, "actions": array}.',
+    "'reply' is a short friendly summary for the user. 'actions' lists itinerary changes to PROPOSE (the user confirms before they apply).",
+    "Action shapes:",
+    '- add: {"op":"add","day":"2026-06-DD","start":"HH:MM","end":"HH:MM","title":string,"category":string,"notes":string,"cost":string,"status":string,"listingId":string?}',
+    '- update: {"op":"update","id":string,"fields":{...}}  (id is an existing item id)',
+    '- remove: {"op":"remove","id":string}',
+    '- move: {"op":"move","id":string,"day":string?,"start":string?,"end":string?}',
+    "Rules: dates within 2026-06-20..2026-06-30; times 24h HH:MM; status one of planned/reserve/booked/backup/optional.",
+    "For 'add', set listingId to a matching curated place id when one fits so it appears on the map; otherwise omit it.",
+    "Reference existing items by their id. If the user only asks a question, return actions: [] and answer in reply.",
+    "",
+    "TRIP DAYS: " + days,
+    "",
+    "CURRENT ITINERARY (id | day time | title | category | status [| place]):",
+    itinerary,
+    "",
+    "CURATED PLACES (id | name | category | area | price):",
+    places
+  ].join("\n");
+}
+
+function assistantApiMessages() {
+  return state.assistantMessages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({ role: m.role, content: m.text }));
+}
+
+function parseAssistantJson(raw) {
+  if (!raw) return null;
+  let text = String(raw).trim();
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) text = fence[1].trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+async function sendAssistant(text) {
+  const message = (text || "").trim();
+  if (!message) return;
+  if (!state.aiProxyUrl) {
+    state.assistantSettings = true;
+    state.assistantError = "Add your worker URL and passphrase in Settings first.";
+    render();
+    return;
+  }
+  state.assistantMessages.push({ role: "user", text: message });
+  state.assistantBusy = true;
+  state.assistantError = "";
+  state.assistantPending = null;
+  render();
+  try {
+    const response = await fetch(state.aiProxyUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-trip-pass": state.aiPass || "" },
+      body: JSON.stringify({
+        model: ASSISTANT_MODEL,
+        max_tokens: 1024,
+        system: buildAssistantSystem(),
+        messages: assistantApiMessages()
+      })
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`Proxy ${response.status}. ${detail.slice(0, 180)}`);
+    }
+    const data = await response.json();
+    const rawText = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n") || "";
+    const parsed = parseAssistantJson(rawText);
+    if (parsed && Array.isArray(parsed.actions) && parsed.actions.length) {
+      state.assistantPending = parsed;
+      state.assistantMessages.push({ role: "assistant", text: parsed.reply || "Here are the proposed changes." });
+    } else {
+      state.assistantMessages.push({ role: "assistant", text: (parsed && parsed.reply) || rawText || "(no response)" });
+    }
+  } catch (error) {
+    state.assistantError = String(error.message || error);
+  } finally {
+    state.assistantBusy = false;
+    render();
+  }
+}
+
+function describeAction(action) {
+  if (!action || !action.op) return "Unknown change";
+  if (action.op === "add") {
+    return `Add "${action.title || (action.listingId && getPlaceById(action.listingId)?.name) || "item"}" on ${action.day || state.selectedDay} ${action.start || ""}${action.end ? "-" + action.end : ""}`.trim();
+  }
+  const current = state.itinerary.find((e) => e.id === action.id);
+  const label = current ? `"${current.title}"` : `item ${action.id}`;
+  if (action.op === "remove") return `Remove ${label}`;
+  if (action.op === "move") return `Move ${label} to ${action.day || (current && current.day) || ""} ${action.start || ""}${action.end ? "-" + action.end : ""}`.trim();
+  if (action.op === "update") {
+    const fields = action.fields ? Object.keys(action.fields).join(", ") : "";
+    return `Update ${label}${fields ? ` (${fields})` : ""}`;
+  }
+  return action.op + " " + label;
+}
+
+function applyAssistantActions(actions) {
+  let applied = 0;
+  (actions || []).forEach((action) => {
+    if (!action || !action.op) return;
+    if (action.op === "add") {
+      const place = action.listingId ? getPlaceById(action.listingId) : null;
+      state.itinerary.push(item(
+        action.day || state.selectedDay,
+        action.start || "10:00",
+        action.end || "11:00",
+        action.title || (place && place.name) || "New item",
+        action.category || (place && (categoryLabels[place.category] || place.category)) || "Custom",
+        action.notes || "",
+        action.cost || "",
+        action.status || "planned",
+        place ? action.listingId : null
+      ));
+      applied++;
+    } else if (action.op === "update") {
+      const entry = state.itinerary.find((e) => e.id === action.id);
+      if (entry && action.fields && typeof action.fields === "object") {
+        const allowed = ["title", "start", "end", "category", "notes", "cost", "status", "day"];
+        allowed.forEach((key) => {
+          if (action.fields[key] !== undefined) entry[key] = action.fields[key];
+        });
+        applied++;
+      }
+    } else if (action.op === "remove") {
+      const before = state.itinerary.length;
+      state.itinerary = state.itinerary.filter((e) => e.id !== action.id);
+      if (state.itinerary.length < before) applied++;
+    } else if (action.op === "move") {
+      const entry = state.itinerary.find((e) => e.id === action.id);
+      if (entry) {
+        if (action.day) entry.day = action.day;
+        if (action.start) entry.start = action.start;
+        if (action.end) entry.end = action.end;
+        applied++;
+      }
+    }
+  });
+  writeStore();
+  return applied;
+}
+
+function confirmAssistantActions() {
+  const pending = state.assistantPending;
+  if (!pending) return;
+  const count = applyAssistantActions(pending.actions);
+  const firstAdd = (pending.actions || []).find((a) => a.op === "add" || a.op === "move");
+  if (firstAdd && firstAdd.day) state.selectedDay = firstAdd.day;
+  state.assistantPending = null;
+  state.assistantMessages.push({ role: "system", text: `Applied ${count} change${count === 1 ? "" : "s"} to your itinerary.` });
+  render();
+}
+
+function dismissAssistantActions() {
+  state.assistantPending = null;
+  state.assistantMessages.push({ role: "system", text: "Discarded the proposed changes." });
+  render();
+}
+
+function renderAssistantSettings() {
+  return el("form", {
+    class: "assistant-settings",
+    onsubmit: (event) => {
+      event.preventDefault();
+      const data = new FormData(event.target);
+      state.aiProxyUrl = (data.get("proxy") || "").trim();
+      state.aiPass = (data.get("pass") || "").trim();
+      saveAiConfig();
+      state.assistantSettings = false;
+      state.assistantError = "";
+      render();
+    }
+  }, [
+    el("p", { class: "muted small" }, ["Connect to your Cloudflare Worker (see ASSISTANT_SETUP.md). Stored only in this browser."]),
+    el("label", { class: "field-label" }, ["Worker URL"]),
+    el("input", { name: "proxy", type: "url", placeholder: "https://leysin-assistant.you.workers.dev", value: state.aiProxyUrl, "aria-label": "Worker URL" }),
+    el("label", { class: "field-label" }, ["Passphrase"]),
+    el("input", { name: "pass", type: "text", placeholder: "shared passphrase", value: state.aiPass, "aria-label": "Passphrase" }),
+    el("div", { class: "listing-actions" }, [
+      el("button", { class: "primary-btn", type: "submit" }, ["Save"]),
+      state.aiProxyUrl ? el("button", { class: "ghost-btn", type: "button", onclick: () => { state.assistantSettings = false; render(); } }, ["Cancel"]) : el("span")
+    ])
+  ]);
+}
+
+function renderAssistantPending() {
+  const pending = state.assistantPending;
+  if (!pending) return el("span");
+  return el("div", { class: "assistant-pending" }, [
+    el("strong", {}, ["Proposed changes"]),
+    el("ul", { class: "pending-list" }, (pending.actions || []).map((action) =>
+      el("li", { class: `pending-${action.op || "x"}` }, [describeAction(action)])
+    )),
+    el("div", { class: "listing-actions" }, [
+      el("button", { class: "primary-btn", type: "button", onclick: confirmAssistantActions }, [`Confirm ${pending.actions.length} change${pending.actions.length === 1 ? "" : "s"}`]),
+      el("button", { class: "ghost-btn", type: "button", onclick: dismissAssistantActions }, ["Discard"])
+    ])
+  ]);
+}
+
+function renderAssistantModal() {
+  const configured = Boolean(state.aiProxyUrl);
+  return el("div", {
+    class: "modal-backdrop",
+    onclick: (event) => { if (event.target.classList.contains("modal-backdrop")) closeAssistant(); }
+  }, [
+    el("div", { class: "assistant-modal", role: "dialog", "aria-label": "Ask Claude" }, [
+      el("div", { class: "section-title" }, [
+        el("h2", {}, ["✨ Ask Claude"]),
+        el("div", { class: "assistant-head-actions" }, [
+          el("button", { class: "origin-clear", type: "button", onclick: () => { state.assistantSettings = !state.assistantSettings; render(); } }, [state.assistantSettings ? "Back" : "Settings"]),
+          el("button", { class: "origin-clear", type: "button", onclick: closeAssistant }, ["Close"])
+        ])
+      ]),
+      state.assistantSettings
+        ? renderAssistantSettings()
+        : el("div", { class: "assistant-body" }, [
+            el("div", { class: "assistant-log" },
+              state.assistantMessages.length
+                ? state.assistantMessages.map((m) => el("div", { class: `chat-msg chat-${m.role}` }, [m.text]))
+                : [el("p", { class: "muted small" }, ["Ask me to add, move, update, or remove itinerary items — e.g. “Add a wine tasting in Yvorne on the 26th around 3pm” or “move the bike-day dinner later.” I'll propose changes for you to confirm."])]
+            ),
+            state.assistantBusy ? el("div", { class: "muted small assistant-thinking" }, ["Claude is thinking…"]) : el("span"),
+            renderAssistantPending(),
+            state.assistantError ? el("div", { class: "assistant-error" }, [state.assistantError]) : el("span"),
+            el("form", {
+              class: "assistant-input",
+              onsubmit: (event) => {
+                event.preventDefault();
+                const field = event.target.querySelector("textarea");
+                const value = field.value;
+                field.value = "";
+                sendAssistant(value);
+              }
+            }, [
+              el("textarea", { placeholder: configured ? "Ask Claude to change the plan…" : "Add your worker URL in Settings first…", "aria-label": "Message", rows: "2", disabled: state.assistantBusy ? "disabled" : null }),
+              el("button", { class: "primary-btn", type: "submit", disabled: state.assistantBusy ? "disabled" : null }, ["Send"])
+            ])
+          ])
+    ])
+  ]);
+}
+
 function backfillSeedItinerary() {
   removeSupersededSeedItems();
   seedItinerary.forEach((seed) => {
@@ -437,7 +728,8 @@ function render() {
       renderHeader(),
       el("main", { class: "main", id: "main", tabindex: "-1" }, [
         renderActiveTab(),
-        state.pendingAddId ? renderAddModal() : el("span")
+        state.pendingAddId ? renderAddModal() : el("span"),
+        state.assistantOpen ? renderAssistantModal() : el("span")
       ])
     ])
   );
@@ -499,6 +791,7 @@ function renderHeader() {
           "aria-pressed": isDark ? "true" : "false",
           onclick: toggleTheme
         }, [isDark ? "Light" : "Dark"]),
+        el("button", { class: "assistant-button", type: "button", onclick: openAssistant }, ["✨ Ask Claude"]),
         el("button", { class: "print-button", onclick: () => window.print() }, ["Print / PDF"])
       ]),
       el("nav", { class: "tabs", "aria-label": "Dashboard tabs" },
