@@ -211,9 +211,14 @@ const listings = [
 let state = {
   activeTab: "overview",
   travelSubTab: "justin-tasha",
-  activeFilter: "all",
+  categoryFilters: new Set(),
+  conditionFilters: new Set(),
+  homesOnly: false,
+  mapView: "map",
+  sort: "trip",
   selectedListingId: null,
   pendingAddId: null,
+  editingItemId: null,
   search: "",
   effort: "all",
   selectedDay: "2026-06-20",
@@ -221,10 +226,12 @@ let state = {
   saved: readStore("leysin_saved", []),
   itinerary: readStore("leysin_itinerary", seedItinerary)
 };
+maybeLoadSharedState();
 backfillSeedItinerary();
 
 let map;
 let markerLayer;
+let mapNode = null;
 let lastMapSignature = "";
 let mapViewState = null;
 let fallbackMapZoom = 1;
@@ -297,6 +304,85 @@ function writeStore() {
   localStorage.setItem("leysin_itinerary", JSON.stringify(state.itinerary));
 }
 
+// ---- Sharing: export / import / link ----------------------------------
+function tripSnapshot() {
+  return { v: 1, exportedAt: new Date().toISOString(), saved: state.saved, itinerary: state.itinerary };
+}
+
+function encodeTrip(snapshot) {
+  // UTF-8 safe base64 for the URL hash
+  return btoa(unescape(encodeURIComponent(JSON.stringify(snapshot))));
+}
+
+function decodeTrip(encoded) {
+  return JSON.parse(decodeURIComponent(escape(atob(encoded))));
+}
+
+function applySnapshot(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.itinerary)) return false;
+  state.itinerary = snapshot.itinerary;
+  state.saved = Array.isArray(snapshot.saved) ? snapshot.saved : [];
+  writeStore();
+  return true;
+}
+
+function maybeLoadSharedState() {
+  try {
+    const hash = (typeof location !== "undefined" && location.hash) || "";
+    const match = hash.match(/[#&]trip=([^&]+)/);
+    if (!match) return;
+    const snapshot = decodeTrip(decodeURIComponent(match[1]));
+    if (snapshot && Array.isArray(snapshot.itinerary) &&
+        confirm("This link contains a shared itinerary. Load it? This replaces the plan saved in this browser.")) {
+      applySnapshot(snapshot);
+    }
+    // Clear the hash either way so a refresh doesn't re-prompt.
+    history.replaceState(null, "", location.pathname + location.search);
+  } catch (error) {
+    console.warn("Could not read shared itinerary from link.", error);
+  }
+}
+
+function exportTrip() {
+  const blob = new Blob([JSON.stringify(tripSnapshot(), null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = el("a", { href: url, download: "leysin-itinerary.json" });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function importTripFromFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const snapshot = JSON.parse(reader.result);
+      if (applySnapshot(snapshot)) {
+        alert("Itinerary imported.");
+        render();
+      } else {
+        alert("That file does not look like a Leysin itinerary export.");
+      }
+    } catch {
+      alert("Could not read that file. Make sure it is a Leysin itinerary JSON export.");
+    }
+  };
+  reader.readAsText(file);
+}
+
+async function copyShareLink() {
+  const base = location.origin + location.pathname;
+  const link = `${base}#trip=${encodeURIComponent(encodeTrip(tripSnapshot()))}`;
+  try {
+    await navigator.clipboard.writeText(link);
+    alert("Share link copied to your clipboard. Anyone who opens it can load this plan.");
+  } catch {
+    prompt("Copy this share link:", link);
+  }
+}
+
 function backfillSeedItinerary() {
   removeSupersededSeedItems();
   seedItinerary.forEach((seed) => {
@@ -347,15 +433,38 @@ function render() {
   app.innerHTML = "";
   app.append(
     el("div", { class: "app-shell" }, [
+      el("a", { class: "skip-link", href: "#main" }, ["Skip to main content"]),
       renderHeader(),
-      el("main", { class: "main" }, [
+      el("main", { class: "main", id: "main", tabindex: "-1" }, [
         renderActiveTab(),
         state.pendingAddId ? renderAddModal() : el("span")
       ])
     ])
   );
   restoreItineraryDayScroll();
+  refreshWeather();
   if (state.activeTab === "map") setTimeout(initMap, 0);
+}
+
+let weatherText = "June avg ~18°C · Leysin";
+let weatherFetchTried = false;
+
+function refreshWeather() {
+  if (weatherFetchTried) return;
+  weatherFetchTried = true;
+  // Live current conditions where the network allows it (e.g. GitHub Pages);
+  // silently keeps the seasonal-average label offline (e.g. inside an artifact).
+  fetch("https://api.open-meteo.com/v1/forecast?latitude=46.34&longitude=7.02&current=temperature_2m")
+    .then((response) => response.ok ? response.json() : Promise.reject())
+    .then((data) => {
+      const temp = data?.current?.temperature_2m;
+      if (typeof temp === "number") {
+        weatherText = `${Math.round(temp)}°C now · Leysin`;
+        const node = document.querySelector(".weather-pill span");
+        if (node) node.textContent = weatherText;
+      }
+    })
+    .catch(() => {});
 }
 
 function rememberItineraryDayScroll() {
@@ -383,7 +492,7 @@ function renderHeader() {
             el("p", { class: "subline" }, ["June 20-30, 2026 · Rte de la Mosse 2 + Rte des Corbelets 43"])
           ])
         ]),
-        el("div", { class: "weather-pill" }, ["☀️", el("span", {}, ["18°C Leysin"])]),
+        el("div", { class: "weather-pill", title: "Live where the network allows it; otherwise the typical late-June daytime temperature." }, ["☀️", el("span", {}, [weatherText])]),
         el("button", {
           class: "theme-toggle",
           type: "button",
@@ -460,6 +569,27 @@ function renderOverview() {
       savedListings.length
         ? el("div", { class: "day-list" }, savedListings.map((listing) => compactListing(listing)))
         : el("div", { class: "empty" }, ["Save places from the Map tab and they will appear here."])
+    ]),
+    renderSharePanel()
+  ]);
+}
+
+function renderSharePanel() {
+  return el("section", { class: "panel panel-pad share-panel" }, [
+    title("Share This Plan", "Sync across the family"),
+    el("p", { class: "muted small" }, ["Your plan saves only in this browser. Use these to copy it to family members. Importing or opening a share link replaces the plan on this device."]),
+    el("div", { class: "listing-actions" }, [
+      el("button", { class: "primary-btn", type: "button", onclick: copyShareLink }, ["Copy share link"]),
+      el("button", { class: "ghost-btn", type: "button", onclick: exportTrip }, ["Export JSON"]),
+      el("label", { class: "ghost-btn import-label" }, [
+        "Import JSON",
+        el("input", {
+          type: "file",
+          accept: "application/json,.json",
+          class: "visually-hidden-input",
+          onchange: (event) => importTripFromFile(event.target.files[0])
+        })
+      ])
     ])
   ]);
 }
@@ -518,28 +648,124 @@ function renderFamilyTravel() {
 }
 
 function renderMapTab() {
-  return el("div", { class: "map-grid" }, [
-    el("aside", { class: "filter-rail" }, filters().map((filter) =>
+  return el("div", { class: "map-shell" }, [
+    el("div", { class: "map-toolbar" }, [
+      el("input", {
+        class: "map-search",
+        type: "search",
+        placeholder: "Search places by name, area, or tag...",
+        value: state.search,
+        "aria-label": "Search places",
+        oninput: (event) => { state.search = event.target.value; refreshMapResults(); }
+      }),
+      el("div", { class: "view-toggle", role: "group", "aria-label": "Choose map or list view" }, [
+        viewToggleBtn("map", "Map"),
+        viewToggleBtn("list", "List")
+      ])
+    ]),
+    el("aside", { class: "filter-rail", role: "group", "aria-label": "Filter places" }, filters().map((filter) =>
         el("button", {
-          class: `filter-chip filter-${filter.id} ${state.activeFilter === filter.id ? "active" : ""}`,
-          onclick: () => {
-            state.activeFilter = filter.id;
-            state.selectedListingId = null;
-            render();
-          }
+          class: `filter-chip filter-${filter.id} ${isFilterActive(filter.id) ? "active" : ""}`,
+          type: "button",
+          "aria-pressed": isFilterActive(filter.id) ? "true" : "false",
+          onclick: () => toggleFilter(filter.id)
         }, [filter.label])
       )
     ),
-    el("section", { class: "panel map-wrap" }, [
-      el("div", { id: "map", role: "application", "aria-label": "Leysin area OpenStreetMap" })
-    ]),
-    el("aside", { class: "builder-side grid" }, [
-      renderMapBuilderPanel(),
-      el("section", { class: "panel panel-pad" }, [
-        title("Add Custom Item", "Saved locally"),
-        renderCustomForm()
+    el("div", { class: "map-grid" }, [
+      state.mapView === "list"
+        ? el("section", { class: "panel list-wrap" }, [renderListView()])
+        : el("section", { class: "panel map-wrap" }, [
+            getMapNode(),
+            renderMapLegend()
+          ]),
+      el("aside", { class: "builder-side grid" }, [
+        renderMapBuilderPanel(),
+        el("section", { class: "panel panel-pad" }, [
+          title("Add Custom Item", "Saved locally"),
+          renderCustomForm()
+        ])
       ])
     ])
+  ]);
+}
+
+function viewToggleBtn(view, label) {
+  return el("button", {
+    class: `toggle-btn ${state.mapView === view ? "active" : ""}`,
+    type: "button",
+    "aria-pressed": state.mapView === view ? "true" : "false",
+    onclick: () => { state.mapView = view; render(); }
+  }, [label]);
+}
+
+function renderListView() {
+  const rows = filteredListings();
+  return el("div", { class: "list-view" }, [
+    el("div", { class: "list-head" }, [
+      el("span", { class: "muted small", id: "list-count" }, [`${rows.length} places`]),
+      el("label", { class: "sort-label" }, [
+        "Sort: ",
+        el("select", { "aria-label": "Sort places", onchange: (event) => { state.sort = event.target.value; render(); } }, [
+          sortOption("trip", "Trip fit"),
+          sortOption("name", "Name"),
+          sortOption("area", "Area")
+        ])
+      ])
+    ]),
+    el("div", { class: "list-results", id: "list-results" },
+      rows.length ? rows.map((listing) => renderListingCard(listing)) : [el("div", { class: "empty" }, ["No places match these filters."])]
+    )
+  ]);
+}
+
+function sortOption(value, label) {
+  return el("option", { value, selected: state.sort === value ? "selected" : null }, [label]);
+}
+
+function refreshMapResults() {
+  if (state.mapView === "list") {
+    const node = document.getElementById("list-results");
+    const count = document.getElementById("list-count");
+    if (node) {
+      const rows = filteredListings();
+      node.innerHTML = "";
+      if (rows.length) rows.forEach((listing) => node.append(renderListingCard(listing)));
+      else node.append(el("div", { class: "empty" }, ["No places match these filters."]));
+      if (count) count.textContent = `${rows.length} places`;
+    }
+  } else if (state.activeTab === "map") {
+    initMap();
+  }
+}
+
+const categoryLegend = [
+  { category: "dining", label: "Dining" },
+  { category: "bars", label: "Bars" },
+  { category: "wine", label: "Wine" },
+  { category: "activities", label: "Activities" },
+  { category: "hiking", label: "Hikes" },
+  { category: "biking", label: "Biking" },
+  { category: "castles", label: "Castles" },
+  { category: "parks", label: "Parks" },
+  { category: "viewpoints", label: "Views" },
+  { category: "lake", label: "Lake" }
+];
+
+function renderMapLegend() {
+  return el("details", { class: "map-legend" }, [
+    el("summary", {}, ["Legend"]),
+    el("div", { class: "legend-grid" }, categoryLegend.map((entry) =>
+      el("span", { class: "legend-row" }, [
+        el("span", { class: "legend-pin", style: `background:${markerColor(entry.category)}` }, [iconText(entry.category)]),
+        entry.label
+      ])
+    ).concat([
+      el("span", { class: "legend-row" }, [
+        el("span", { class: "legend-pin legend-star" }, ["★"]),
+        "On your itinerary"
+      ])
+    ]))
   ]);
 }
 
@@ -577,7 +803,7 @@ function renderSelectedDayTiming() {
 }
 
 function renderHomeFilterStatus() {
-  const homesActive = state.activeFilter === "homes";
+  const homesActive = state.homesOnly;
   const selected = listings.find((listing) => listing.id === state.selectedListingId);
   return el("div", { class: "origin-status" }, [
     selected
@@ -718,25 +944,51 @@ function filters() {
   ];
 }
 
+const FILTER_GROUPS = {
+  dining: "category", bars: "category", wine: "category", activities: "category",
+  hiking: "category", biking: "category", castles: "category", parks: "category",
+  rainy: "condition", clear: "condition", moderate: "condition"
+};
+
+function toggleFilter(id) {
+  state.selectedListingId = null;
+  if (id === "all") {
+    state.categoryFilters.clear();
+    state.conditionFilters.clear();
+    state.homesOnly = false;
+  } else if (id === "homes") {
+    state.homesOnly = !state.homesOnly;
+  } else {
+    const group = FILTER_GROUPS[id] === "condition" ? state.conditionFilters : state.categoryFilters;
+    group.has(id) ? group.delete(id) : group.add(id);
+  }
+  render();
+}
+
+function isFilterActive(id) {
+  if (id === "all") return state.categoryFilters.size === 0 && state.conditionFilters.size === 0 && !state.homesOnly;
+  if (id === "homes") return state.homesOnly;
+  return state.categoryFilters.has(id) || state.conditionFilters.has(id);
+}
+
 function filteredListings() {
   const search = state.search.trim().toLowerCase();
-  const homesFilter = state.activeFilter === "homes";
+  const homesFilter = state.homesOnly;
   if (state.selectedListingId) {
     const selected = listings.find((listing) => listing.id === state.selectedListingId);
     return selected ? [selected] : [];
   }
+  const cats = state.categoryFilters;
+  const conds = state.conditionFilters;
   let rows = listings.filter((listing) => {
-    const filterOk =
-      state.activeFilter === "all" ||
-      homesFilter ||
-      listing.category === state.activeFilter ||
-      listing.weather.includes(state.activeFilter) ||
-      listing.tags.includes(state.activeFilter) ||
-      listing.effort === state.activeFilter;
+    const categoryOk = cats.size === 0 || cats.has(listing.category);
+    const conditionOk = conds.size === 0 || [...conds].some((condition) =>
+      listing.weather.includes(condition) || listing.tags.includes(condition) || listing.effort === condition
+    );
     const effortOk = state.effort === "all" || listing.effort === state.effort;
     const searchOk = !search || [listing.name, listing.area, listing.description, listing.subcategory, ...listing.tags].join(" ").toLowerCase().includes(search);
     const originOk = !homesFilter || isReachableFromAnyHome(listing);
-    return filterOk && effortOk && searchOk && originOk;
+    return categoryOk && conditionOk && effortOk && searchOk && originOk;
   });
   const priorityScore = (listing) => listing.priority === "Must" ? 0 : 1;
   if (state.sort === "name") rows.sort((a, b) => a.name.localeCompare(b.name));
@@ -861,24 +1113,97 @@ function savedRow(listing) {
 }
 
 function renderTimelineItem(entry, index, count) {
+  if (state.editingItemId === entry.id) return renderTimelineEditor(entry);
   const place = getPlaceById(entry.listingId);
+  const body = [
+    el("strong", {}, [entry.title]),
+    el("p", { class: "muted small" }, [`${entry.category} · ${entry.cost || "Cost TBD"} · ${statusLabel(entry.status)}`]),
+    entry.notes ? el("p", { class: "small" }, [entry.notes]) : el("span")
+  ];
+  const titleBlock = place
+    ? el("button", {
+        class: "timeline-open",
+        type: "button",
+        "aria-label": `Show ${entry.title} on the map`,
+        onclick: () => selectPlaceFromItinerary(entry.listingId)
+      }, body)
+    : el("div", { class: "timeline-open static" }, body);
   return el("article", { class: `timeline-card ${place ? "selectable" : ""}` }, [
     el("div", { class: "timeline-top" }, [
       el("div", { class: "time" }, [`${entry.start}-${entry.end}`]),
-      el("div", { style: "flex: 1", onclick: place ? () => selectPlaceFromItinerary(entry.listingId) : null }, [
-        el("strong", {}, [entry.title]),
-        el("p", { class: "muted small" }, [`${entry.category} · ${entry.cost || "Cost TBD"} · ${entry.status}`]),
-        entry.notes ? el("p", { class: "small" }, [entry.notes]) : el("span")
-      ])
+      titleBlock
     ]),
     el("div", { class: "timeline-actions" }, [
-      el("button", { class: "ghost-btn", onclick: () => shiftItem(entry.id, -1), disabled: index === 0 ? "disabled" : null }, ["Move up"]),
-      el("button", { class: "ghost-btn", onclick: () => shiftItem(entry.id, 1), disabled: index === count - 1 ? "disabled" : null }, ["Move down"]),
-      el("button", { class: "ghost-btn", onclick: () => editItem(entry.id) }, ["Edit"]),
-      place ? el("button", { class: "ghost-btn", onclick: () => selectPlaceFromItinerary(entry.listingId) }, ["Map"]) : el("span"),
-      el("button", { class: "danger-btn", onclick: () => removeItem(entry.id) }, ["Remove"])
+      el("button", { class: "ghost-btn", type: "button", onclick: () => shiftItem(entry.id, -1), disabled: index === 0 ? "disabled" : null, "aria-label": `Move ${entry.title} earlier` }, ["Move up"]),
+      el("button", { class: "ghost-btn", type: "button", onclick: () => shiftItem(entry.id, 1), disabled: index === count - 1 ? "disabled" : null, "aria-label": `Move ${entry.title} later` }, ["Move down"]),
+      el("button", { class: "ghost-btn", type: "button", onclick: () => startEditItem(entry.id) }, ["Edit"]),
+      place ? el("button", { class: "ghost-btn", type: "button", onclick: () => selectPlaceFromItinerary(entry.listingId) }, ["Map"]) : el("span"),
+      el("button", { class: "danger-btn", type: "button", onclick: () => removeItem(entry.id), "aria-label": `Remove ${entry.title}` }, ["Remove"])
     ])
   ]);
+}
+
+function statusLabel(status) {
+  return { planned: "Planned", reserve: "Needs reservation", booked: "Booked", backup: "Backup", optional: "Optional" }[status] || status;
+}
+
+function renderTimelineEditor(entry) {
+  return el("article", { class: "timeline-card editing" }, [
+    el("form", {
+      class: "item-form inline-edit",
+      onsubmit: (event) => {
+        event.preventDefault();
+        const data = new FormData(event.target);
+        saveItemEdit(entry.id, {
+          title: data.get("title") || entry.title,
+          start: data.get("start") || entry.start,
+          end: data.get("end") || entry.end,
+          category: data.get("category") || entry.category,
+          cost: data.get("cost") || "",
+          status: data.get("status") || entry.status,
+          notes: data.get("notes") || ""
+        });
+      }
+    }, [
+      el("input", { name: "title", value: entry.title, placeholder: "Title", required: "required", "aria-label": "Title" }),
+      el("div", { class: "form-grid" }, [
+        el("input", { name: "start", type: "time", value: entry.start, "aria-label": "Start time" }),
+        el("input", { name: "end", type: "time", value: entry.end, "aria-label": "End time" })
+      ]),
+      el("div", { class: "form-grid" }, [
+        el("input", { name: "category", value: entry.category, placeholder: "Category", "aria-label": "Category" }),
+        el("input", { name: "cost", value: entry.cost || "", placeholder: "Cost", "aria-label": "Cost" })
+      ]),
+      el("select", { name: "status", "aria-label": "Status" }, ["planned", "reserve", "booked", "backup", "optional"].map((status) =>
+        el("option", { value: status, selected: entry.status === status ? "selected" : null }, [statusLabel(status)])
+      )),
+      el("textarea", { name: "notes", placeholder: "Notes, confirmation, weather backup...", "aria-label": "Notes" }, [entry.notes || ""]),
+      el("div", { class: "listing-actions" }, [
+        el("button", { class: "primary-btn", type: "submit" }, ["Save"]),
+        el("button", { class: "ghost-btn", type: "button", onclick: cancelEditItem }, ["Cancel"])
+      ])
+    ])
+  ]);
+}
+
+function startEditItem(id) {
+  state.editingItemId = id;
+  render();
+}
+
+function cancelEditItem() {
+  state.editingItemId = null;
+  render();
+}
+
+function saveItemEdit(id, data) {
+  const entry = state.itinerary.find((candidate) => candidate.id === id);
+  if (entry) {
+    Object.assign(entry, data);
+    writeStore();
+  }
+  state.editingItemId = null;
+  render();
 }
 
 function renderCustomForm() {
@@ -1128,21 +1453,7 @@ function removeItem(id) {
   render();
 }
 
-function editItem(id) {
-  const entry = state.itinerary.find((candidate) => candidate.id === id);
-  if (!entry) return;
-  const title = prompt("Edit title", entry.title);
-  if (title === null) return;
-  const start = prompt("Start time", entry.start);
-  if (start === null) return;
-  const end = prompt("End time", entry.end);
-  if (end === null) return;
-  const notes = prompt("Notes", entry.notes || "");
-  if (notes === null) return;
-  Object.assign(entry, { title, start, end, notes });
-  writeStore();
-  render();
-}
+// Editing is handled inline via startEditItem / renderTimelineEditor / saveItemEdit.
 
 function shiftItem(id, direction) {
   const dayItems = state.itinerary
@@ -1159,31 +1470,44 @@ function shiftItem(id, direction) {
   render();
 }
 
+function getMapNode() {
+  if (!mapNode) {
+    mapNode = el("div", { id: "map", role: "application", "aria-label": "Leysin area OpenStreetMap" });
+  }
+  return mapNode;
+}
+
 function initMap() {
+  if (state.activeTab !== "map" || state.mapView !== "map") return;
   if (!window.L) {
     renderFallbackMap();
     return;
   }
-  const filtered = filteredListings();
   const visiblePins = mapListings();
-  if (map) {
-    map.remove();
-    map = null;
+  const container = mapNode || document.getElementById("map");
+  if (!container) return;
+  // Reuse the existing map instance when possible so tiles are not reloaded
+  // and the view does not flicker on every interaction.
+  if (!map || map.getContainer() !== container) {
+    if (map) { map.remove(); map = null; }
+    map = L.map(container, { scrollWheelZoom: true }).setView(mapViewState?.center || [46.35, 7.02], mapViewState?.zoom || 10);
+    map.scrollWheelZoom.enable();
+    container.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+    markerLayer = L.layerGroup().addTo(map);
+  } else {
+    map.invalidateSize();
+    markerLayer.clearLayers();
   }
-  map = L.map("map", { scrollWheelZoom: true }).setView(mapViewState?.center || [46.35, 7.02], mapViewState?.zoom || 10);
-  map.scrollWheelZoom.enable();
-  map.getContainer().addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 18,
-    attribution: "&copy; OpenStreetMap contributors"
-  }).addTo(map);
-  markerLayer = L.layerGroup().addTo(map);
   homeLocations.forEach((home) => {
     const inItinerary = isListingInItinerary(home.id);
     const marker = L.marker(home.coordinates, {
       icon: L.divIcon({
         className: "",
-        html: `<div class="home-map-marker ${state.activeFilter === "homes" ? "active" : ""} ${inItinerary ? "starred" : ""}" style="background:${home.color}" title="${home.address}" role="button" aria-label="${home.address}. Homes filter marker.">${inItinerary ? "★" : home.short === "Mosse" ? "M" : "C"}</div>`,
+        html: `<div class="home-map-marker ${state.homesOnly ? "active" : ""} ${inItinerary ? "starred" : ""}" style="background:${home.color}" title="${home.address}" role="button" aria-label="${home.address}. Homes filter marker.">${inItinerary ? "★" : home.short === "Mosse" ? "M" : "C"}</div>`,
         iconSize: [30, 30],
         iconAnchor: [15, 15]
       })
@@ -1198,7 +1522,7 @@ function initMap() {
       </div>
     `);
     marker.on("click", () => {
-      state.activeFilter = state.activeFilter === "homes" ? "all" : "homes";
+      state.homesOnly = !state.homesOnly;
       render();
     });
     marker.addTo(markerLayer);
@@ -1207,27 +1531,20 @@ function initMap() {
   visiblePins.forEach((listing) => {
     const isSelected = state.selectedListingId === listing.id;
     const inItinerary = isListingInItinerary(listing.id);
-    const marker = L.circleMarker(listing.coordinates, {
-      radius: isSelected ? 13 : inItinerary ? 10 : listing.priority === "Must" ? 8 : 6,
-      color: isSelected ? "#dc3d26" : inItinerary ? "#c49a45" : markerColor(listing.category),
-      fillColor: markerColor(listing.category),
-      fillOpacity: isSelected ? 0.96 : 0.82,
-      weight: isSelected ? 4 : 2
+    const glyph = inItinerary ? "★" : iconText(listing.category);
+    const marker = L.marker(listing.coordinates, {
+      title: listing.name,
+      keyboard: true,
+      icon: L.divIcon({
+        className: "",
+        html: `<div class="place-pin ${isSelected ? "selected" : ""} ${inItinerary ? "starred" : ""} ${listing.priority === "Must" ? "must" : ""}" style="background:${markerColor(listing.category)}" aria-label="${escapeHtml(listing.name)}, ${escapeHtml(categoryLabels[listing.category] || listing.category)}">${glyph}</div>`,
+        iconSize: [26, 26],
+        iconAnchor: [13, 13]
+      })
     });
     marker.bindPopup(renderListingPopup(listing));
     marker.on("click", () => selectListing(listing.id));
     marker.addTo(markerLayer);
-    if (inItinerary) {
-      L.marker(listing.coordinates, {
-        icon: L.divIcon({
-          className: "",
-          html: `<div class="itinerary-star-marker">★</div>`,
-          iconSize: [24, 24],
-          iconAnchor: [12, 12]
-        }),
-        interactive: false
-      }).addTo(markerLayer);
-    }
     if (isSelected) selectedMarker = marker;
   });
   drawDayRoute(map, markerLayer);
@@ -1356,12 +1673,12 @@ function renderFallbackMap() {
     const offset = index === 0 ? -2.2 : 2.2;
     const inItinerary = isListingInItinerary(home.id);
     fallbackLayer.append(el("button", {
-      class: `home-fallback-marker ${state.activeFilter === "homes" ? "active" : ""} ${inItinerary ? "starred" : ""}`,
+      class: `home-fallback-marker ${state.homesOnly ? "active" : ""} ${inItinerary ? "starred" : ""}`,
       title: `${home.address} · filter results from here`,
       "aria-label": `${home.address}. Homes filter marker.`,
       style: `left:${point.x + offset}%; top:${point.y + offset}%; background:${home.color};`,
       onclick: () => {
-        state.activeFilter = state.activeFilter === "homes" ? "all" : "homes";
+        state.homesOnly = !state.homesOnly;
         render();
       }
     }, [inItinerary ? "★" : home.short === "Mosse" ? "M" : "C"]));
@@ -1485,3 +1802,4 @@ window.tripHubActions = {
 };
 
 render();
+// End of Leysin Trip Hub app.
