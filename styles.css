@@ -444,10 +444,12 @@ h1 {
 
 .filter-rail {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  overflow-x: auto;
+  overflow: visible;
   padding: 12px;
-  border-bottom: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   background: rgba(255,253,248,.94);
 }
 
@@ -1063,18 +1065,11 @@ textarea { min-height: 86px; resize: vertical; }
 
 @media (min-width: 1080px) {
   .map-grid {
-    grid-template-columns: 220px minmax(0,1fr) 440px;
+    grid-template-columns: minmax(0,1fr) 440px;
     align-items: start;
   }
-  .filter-rail {
-    position: sticky;
-    top: 98px;
-    display: grid;
-    overflow: visible;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-  }
-  #map { height: calc(100vh - 230px); min-height: 620px; }
+  #map { height: calc(100vh - 300px); min-height: 560px; }
+  .list-wrap { max-height: calc(100vh - 300px); }
   .listing-list { max-height: calc(100vh - 356px); overflow: auto; padding-right: 4px; }
 }
 
