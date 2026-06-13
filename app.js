@@ -312,24 +312,162 @@ function writeStore() {
   localStorage.setItem("leysin_itinerary", JSON.stringify(state.itinerary));
 }
 
-// ---- Sharing: export / import / link ----------------------------------
-function tripSnapshot() {
-  return { v: 1, exportedAt: new Date().toISOString(), saved: state.saved, itinerary: state.itinerary };
+// ---- Sharing: short compressed link -----------------------------------
+// Minimal lz-string (URL-safe) so the share link stays short without a server.
+var LZString = (function () {
+  var keyStrUriSafe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-$";
+  var f = String.fromCharCode;
+  var baseReverseDic = {};
+  function getBaseValue(alphabet, character) {
+    if (!baseReverseDic[alphabet]) {
+      baseReverseDic[alphabet] = {};
+      for (var i = 0; i < alphabet.length; i++) baseReverseDic[alphabet][alphabet.charAt(i)] = i;
+    }
+    return baseReverseDic[alphabet][character];
+  }
+  var LZ = {
+    compressToEncodedURIComponent: function (input) {
+      if (input == null) return "";
+      return LZ._compress(input, 6, function (a) { return keyStrUriSafe.charAt(a); });
+    },
+    decompressFromEncodedURIComponent: function (input) {
+      if (input == null) return "";
+      if (input == "") return null;
+      input = input.replace(/ /g, "+");
+      return LZ._decompress(input.length, 32, function (index) { return getBaseValue(keyStrUriSafe, input.charAt(index)); });
+    },
+    _compress: function (uncompressed, bitsPerChar, getCharFromInt) {
+      if (uncompressed == null) return "";
+      var i, value, context_dictionary = {}, context_dictionaryToCreate = {}, context_c = "",
+        context_wc = "", context_w = "", context_enlargeIn = 2, context_dictSize = 3, context_numBits = 2,
+        context_data = [], context_data_val = 0, context_data_position = 0, ii;
+      function pushBitsFromValue(val, n) {
+        for (i = 0; i < n; i++) {
+          context_data_val = (context_data_val << 1) | (val & 1);
+          if (context_data_position == bitsPerChar - 1) { context_data_position = 0; context_data.push(getCharFromInt(context_data_val)); context_data_val = 0; }
+          else { context_data_position++; }
+          val = val >> 1;
+        }
+      }
+      function pushZeroBits(n) {
+        for (i = 0; i < n; i++) {
+          context_data_val = (context_data_val << 1);
+          if (context_data_position == bitsPerChar - 1) { context_data_position = 0; context_data.push(getCharFromInt(context_data_val)); context_data_val = 0; }
+          else { context_data_position++; }
+        }
+      }
+      function emit(w) {
+        if (Object.prototype.hasOwnProperty.call(context_dictionaryToCreate, w)) {
+          if (w.charCodeAt(0) < 256) { pushZeroBits(context_numBits); pushBitsFromValue(w.charCodeAt(0), 8); }
+          else {
+            value = 1;
+            for (i = 0; i < context_numBits; i++) {
+              context_data_val = (context_data_val << 1) | value;
+              if (context_data_position == bitsPerChar - 1) { context_data_position = 0; context_data.push(getCharFromInt(context_data_val)); context_data_val = 0; }
+              else { context_data_position++; }
+              value = 0;
+            }
+            pushBitsFromValue(w.charCodeAt(0), 16);
+          }
+          context_enlargeIn--;
+          if (context_enlargeIn == 0) { context_enlargeIn = Math.pow(2, context_numBits); context_numBits++; }
+          delete context_dictionaryToCreate[w];
+        } else {
+          pushBitsFromValue(context_dictionary[w], context_numBits);
+        }
+        context_enlargeIn--;
+        if (context_enlargeIn == 0) { context_enlargeIn = Math.pow(2, context_numBits); context_numBits++; }
+      }
+      for (ii = 0; ii < uncompressed.length; ii += 1) {
+        context_c = uncompressed.charAt(ii);
+        if (!Object.prototype.hasOwnProperty.call(context_dictionary, context_c)) { context_dictionary[context_c] = context_dictSize++; context_dictionaryToCreate[context_c] = true; }
+        context_wc = context_w + context_c;
+        if (Object.prototype.hasOwnProperty.call(context_dictionary, context_wc)) { context_w = context_wc; }
+        else { emit(context_w); context_dictionary[context_wc] = context_dictSize++; context_w = String(context_c); }
+      }
+      if (context_w !== "") emit(context_w);
+      value = 2;
+      pushBitsFromValue(value, context_numBits);
+      while (true) {
+        context_data_val = (context_data_val << 1);
+        if (context_data_position == bitsPerChar - 1) { context_data.push(getCharFromInt(context_data_val)); break; }
+        else context_data_position++;
+      }
+      return context_data.join("");
+    },
+    _decompress: function (length, resetValue, getNextValue) {
+      var dictionary = [], enlargeIn = 4, dictSize = 4, numBits = 3, entry = "", result = [],
+        i, w, bits, resb, maxpower, power, c, data = { val: getNextValue(0), position: resetValue, index: 1 };
+      for (i = 0; i < 3; i += 1) dictionary[i] = i;
+      function readBits(n) {
+        var b = 0, mp = Math.pow(2, n), pw = 1;
+        while (pw != mp) {
+          resb = data.val & data.position;
+          data.position >>= 1;
+          if (data.position == 0) { data.position = resetValue; data.val = getNextValue(data.index++); }
+          b |= (resb > 0 ? 1 : 0) * pw;
+          pw <<= 1;
+        }
+        return b;
+      }
+      bits = readBits(2);
+      switch (bits) {
+        case 0: c = f(readBits(8)); break;
+        case 1: c = f(readBits(16)); break;
+        case 2: return "";
+      }
+      dictionary[3] = c; w = c; result.push(c);
+      while (true) {
+        if (data.index > length) return "";
+        bits = readBits(numBits);
+        switch (c = bits) {
+          case 0: dictionary[dictSize++] = f(readBits(8)); c = dictSize - 1; enlargeIn--; break;
+          case 1: dictionary[dictSize++] = f(readBits(16)); c = dictSize - 1; enlargeIn--; break;
+          case 2: return result.join("");
+        }
+        if (enlargeIn == 0) { enlargeIn = Math.pow(2, numBits); numBits++; }
+        if (dictionary[c]) { entry = dictionary[c]; }
+        else { if (c === dictSize) { entry = w + w.charAt(0); } else { return null; } }
+        result.push(entry);
+        dictionary[dictSize++] = w + entry.charAt(0);
+        enlargeIn--;
+        w = entry;
+        if (enlargeIn == 0) { enlargeIn = Math.pow(2, numBits); numBits++; }
+      }
+    }
+  };
+  return LZ;
+})();
+
+function shareSnapshot() {
+  // Drop the long internal ids (regenerated on load) to keep the link short.
+  const itinerary = state.itinerary.map(({ id, ...rest }) => rest);
+  return { s: state.saved, i: itinerary };
 }
 
-function encodeTrip(snapshot) {
-  // UTF-8 safe base64 for the URL hash
-  return btoa(unescape(encodeURIComponent(JSON.stringify(snapshot))));
+function encodeShare(snapshot) {
+  return LZString.compressToEncodedURIComponent(JSON.stringify(snapshot));
+}
+
+function decodeShare(encoded) {
+  const json = LZString.decompressFromEncodedURIComponent(encoded);
+  return json ? JSON.parse(json) : null;
 }
 
 function decodeTrip(encoded) {
+  // Backward compatibility for older base64 #trip= links.
   return JSON.parse(decodeURIComponent(escape(atob(encoded))));
 }
 
 function applySnapshot(snapshot) {
-  if (!snapshot || !Array.isArray(snapshot.itinerary)) return false;
-  state.itinerary = snapshot.itinerary;
-  state.saved = Array.isArray(snapshot.saved) ? snapshot.saved : [];
+  if (!snapshot) return false;
+  const items = snapshot.itinerary || snapshot.i;
+  const saved = snapshot.saved || snapshot.s;
+  if (!Array.isArray(items)) return false;
+  state.itinerary = items.map((entry, index) =>
+    entry.id ? entry : { ...entry, id: `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}` }
+  );
+  state.saved = Array.isArray(saved) ? saved : [];
   writeStore();
   return true;
 }
@@ -337,11 +475,12 @@ function applySnapshot(snapshot) {
 function maybeLoadSharedState() {
   try {
     const hash = (typeof location !== "undefined" && location.hash) || "";
+    const planMatch = hash.match(/[#&]plan=([^&]+)/);
     const tripMatch = hash.match(/[#&]trip=([^&]+)/);
     const aiMatch = hash.match(/[#&]ai=([^&]+)/);
-    if (tripMatch) {
-      const snapshot = decodeTrip(decodeURIComponent(tripMatch[1]));
-      if (snapshot && Array.isArray(snapshot.itinerary) &&
+    if (planMatch || tripMatch) {
+      const snapshot = planMatch ? decodeShare(planMatch[1]) : decodeTrip(decodeURIComponent(tripMatch[1]));
+      if (snapshot &&
           confirm("This link contains a shared itinerary. Load it? This replaces the plan saved in this browser.")) {
         applySnapshot(snapshot);
       }
@@ -362,41 +501,12 @@ function maybeLoadSharedState() {
   }
 }
 
-function exportTrip() {
-  const blob = new Blob([JSON.stringify(tripSnapshot(), null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = el("a", { href: url, download: "leysin-itinerary.json" });
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
-}
-
-function importTripFromFile(file) {
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const snapshot = JSON.parse(reader.result);
-      if (applySnapshot(snapshot)) {
-        alert("Itinerary imported.");
-        render();
-      } else {
-        alert("That file does not look like a Leysin itinerary export.");
-      }
-    } catch {
-      alert("Could not read that file. Make sure it is a Leysin itinerary JSON export.");
-    }
-  };
-  reader.readAsText(file);
-}
-
 async function copyShareLink() {
   const base = location.origin + location.pathname;
-  const link = `${base}#trip=${encodeURIComponent(encodeTrip(tripSnapshot()))}`;
+  const link = `${base}#plan=${encodeShare(shareSnapshot())}`;
   try {
     await navigator.clipboard.writeText(link);
-    alert("Share link copied to your clipboard. Anyone who opens it can load this plan.");
+    alert("Share link copied. Send it to family — opening it loads this plan on their device.");
   } catch {
     prompt("Copy this share link:", link);
   }
@@ -902,19 +1012,9 @@ function renderOverview() {
 function renderSharePanel() {
   return el("section", { class: "panel panel-pad share-panel" }, [
     title("Share This Plan", "Sync across the family"),
-    el("p", { class: "muted small" }, ["Your plan saves only in this browser. Use these to copy it to family members. Importing or opening a share link replaces the plan on this device."]),
+    el("p", { class: "muted small" }, ["Copy a link to your plan and send it to family. Opening it loads this itinerary on their device."]),
     el("div", { class: "listing-actions" }, [
-      el("button", { class: "primary-btn", type: "button", onclick: copyShareLink }, ["Copy share link"]),
-      el("button", { class: "ghost-btn", type: "button", onclick: exportTrip }, ["Export JSON"]),
-      el("label", { class: "ghost-btn import-label" }, [
-        "Import JSON",
-        el("input", {
-          type: "file",
-          accept: "application/json,.json",
-          class: "visually-hidden-input",
-          onchange: (event) => importTripFromFile(event.target.files[0])
-        })
-      ])
+      el("button", { class: "primary-btn", type: "button", onclick: copyShareLink }, ["Copy share link"])
     ])
   ]);
 }
