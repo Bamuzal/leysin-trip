@@ -234,8 +234,9 @@ let state = {
   aiProxyUrl: readStore("leysin_ai_proxy", ""),
   aiPass: readStore("leysin_ai_pass", "")
 };
-maybeLoadSharedState();
-backfillSeedItinerary();
+let sharedNotice = "";
+const loadedSharedPlan = maybeLoadSharedState();
+if (!loadedSharedPlan) backfillSeedItinerary();
 
 let map;
 let markerLayer;
@@ -473,32 +474,39 @@ function applySnapshot(snapshot) {
 }
 
 function maybeLoadSharedState() {
+  // Auto-applies a shared plan / assistant config from the link. No blocking
+  // confirm() dialog — those are silently dismissed inside in-app browsers and
+  // during page load, which previously stopped shared links from loading.
+  let loadedPlan = false;
   try {
     const hash = (typeof location !== "undefined" && location.hash) || "";
     const planMatch = hash.match(/[#&]plan=([^&]+)/);
     const tripMatch = hash.match(/[#&]trip=([^&]+)/);
     const aiMatch = hash.match(/[#&]ai=([^&]+)/);
+    const notes = [];
     if (planMatch || tripMatch) {
       const snapshot = planMatch ? decodeShare(planMatch[1]) : decodeTrip(decodeURIComponent(tripMatch[1]));
-      if (snapshot &&
-          confirm("This link contains a shared itinerary. Load it? This replaces the plan saved in this browser.")) {
-        applySnapshot(snapshot);
+      if (snapshot && applySnapshot(snapshot)) {
+        loadedPlan = true;
+        notes.push("Loaded the shared itinerary from your link.");
       }
     }
     if (aiMatch) {
       const config = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(aiMatch[1])))));
-      if (config && config.url &&
-          confirm("This link will connect the Claude assistant on this device. Continue?")) {
+      if (config && config.url) {
         state.aiProxyUrl = config.url;
         state.aiPass = config.pass || "";
         saveAiConfig();
+        notes.push("Connected the Claude assistant on this device.");
       }
     }
-    // Clear the hash either way so a refresh doesn't re-prompt.
-    if (tripMatch || aiMatch) history.replaceState(null, "", location.pathname + location.search);
+    if (notes.length) sharedNotice = notes.join(" ");
+    // Clear the hash so a refresh doesn't re-apply.
+    if (planMatch || tripMatch || aiMatch) history.replaceState(null, "", location.pathname + location.search);
   } catch (error) {
     console.warn("Could not read shared settings from link.", error);
   }
+  return loadedPlan;
 }
 
 async function copyShareLink() {
@@ -869,6 +877,7 @@ function render() {
       el("a", { class: "skip-link", href: "#main" }, ["Skip to main content"]),
       renderHeader(),
       el("main", { class: "main", id: "main", tabindex: "-1" }, [
+        sharedNotice ? renderSharedNotice() : el("span"),
         renderActiveTab(),
         state.pendingAddId ? renderAddModal() : el("span"),
         state.assistantOpen ? renderAssistantModal() : el("span")
@@ -1016,6 +1025,13 @@ function renderSharePanel() {
     el("div", { class: "listing-actions" }, [
       el("button", { class: "primary-btn", type: "button", onclick: copyShareLink }, ["Copy share link"])
     ])
+  ]);
+}
+
+function renderSharedNotice() {
+  return el("div", { class: "shared-notice", role: "status" }, [
+    el("span", {}, ["✓ " + sharedNotice]),
+    el("button", { class: "origin-clear", type: "button", onclick: () => { sharedNotice = ""; render(); } }, ["Dismiss"])
   ]);
 }
 

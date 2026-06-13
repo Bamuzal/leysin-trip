@@ -1269,6 +1269,22 @@ textarea { min-height: 86px; resize: vertical; }
 .share-panel .listing-actions { flex-wrap: wrap; }
 .import-label { cursor: pointer; position: relative; }
 
+/* ===================== Shared-link notice ===================== */
+.shared-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--green);
+  border-radius: var(--radius);
+  background: rgba(0, 122, 83, .1);
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 14px;
+}
+
 /* ===================== Claude assistant ===================== */
 .assistant-button {
   min-height: 38px;
