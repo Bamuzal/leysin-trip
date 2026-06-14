@@ -27,14 +27,28 @@ In the worker's **Settings → Variables and Secrets**:
 
 Re-deploy if prompted.
 
-## 4. Connect the site
+## 4. Add a KV namespace (enables tiny share links)
+The same worker also turns big share links into short codes (`.../#p=...`) by storing the
+plan. This needs one free KV namespace:
+1. **Workers & Pages → KV → Create a namespace.** Name it e.g. `leysin-plans`.
+2. Open your worker → **Settings → Bindings → Add → KV namespace.**
+3. Variable name: `TRIP_KV`  →  select the `leysin-plans` namespace. Save and re-deploy.
+
+(If you skip this, sharing still works — it just falls back to the longer self-contained link.)
+
+## 5. Connect the site
 1. Open the planner: https://bamuzal.github.io/leysin-trip/
 2. Click **Ask Claude → Settings** (gear).
 3. Paste the **Worker URL** and the **passphrase** you chose. Save.
-4. These are stored only in your browser. Anyone you want to use the assistant enters the
-   same worker URL + passphrase once on their device.
+4. These are stored only in your browser. To give family the assistant with no setup, use
+   **Copy invite link for family** in that same Settings panel.
 
-## 5. Use it
+Share links are created with the **Copy share link** button on the Overview tab. With the
+KV namespace bound, the editor (anyone with the worker + passphrase configured) gets a tiny
+`#p=` link; everyone else can still open it with no setup, because the link carries the
+worker address. Plans auto-expire from storage after ~180 days.
+
+## 6. Use the assistant
 Type things like:
 - "Add a wine tasting in Yvorne on the 26th around 3pm."
 - "Move the June 22 bike day dinner to 7:30pm."

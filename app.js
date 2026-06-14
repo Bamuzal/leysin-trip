@@ -480,11 +480,19 @@ function maybeLoadSharedState() {
   let loadedPlan = false;
   try {
     const hash = (typeof location !== "undefined" && location.hash) || "";
+    const shortMatch = hash.match(/[#&]p=([^&]+)/);
     const planMatch = hash.match(/[#&]plan=([^&]+)/);
     const tripMatch = hash.match(/[#&]trip=([^&]+)/);
     const aiMatch = hash.match(/[#&]ai=([^&]+)/);
     const notes = [];
-    if (planMatch || tripMatch) {
+    if (shortMatch) {
+      // Tiny worker-stored link: decode {u: workerUrl, id} and fetch the plan.
+      const token = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(shortMatch[1])))));
+      if (token && token.u && token.id) {
+        loadShortPlan(token.u, token.id); // async: applies + re-renders on success
+        loadedPlan = true; // skip seeding; the fetched plan replaces it
+      }
+    } else if (planMatch || tripMatch) {
       const snapshot = planMatch ? decodeShare(planMatch[1]) : decodeTrip(decodeURIComponent(tripMatch[1]));
       if (snapshot && applySnapshot(snapshot)) {
         loadedPlan = true;
@@ -502,7 +510,7 @@ function maybeLoadSharedState() {
     }
     if (notes.length) sharedNotice = notes.join(" ");
     // Clear the hash so a refresh doesn't re-apply.
-    if (planMatch || tripMatch || aiMatch) history.replaceState(null, "", location.pathname + location.search);
+    if (shortMatch || planMatch || tripMatch || aiMatch) history.replaceState(null, "", location.pathname + location.search);
   } catch (error) {
     console.warn("Could not read shared settings from link.", error);
   }
@@ -511,13 +519,52 @@ function maybeLoadSharedState() {
 
 async function copyShareLink() {
   const base = location.origin + location.pathname;
-  const link = `${base}#plan=${encodeShare(shareSnapshot())}`;
+  let link = "";
+  // Preferred: store the plan on the Worker and use a tiny #p= code.
+  const workerBase = state.aiProxyUrl ? state.aiProxyUrl.replace(/\/+$/, "") : "";
+  if (workerBase) {
+    try {
+      const res = await fetch(`${workerBase}/save`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-trip-pass": state.aiPass || "" },
+        body: JSON.stringify(shareSnapshot())
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.id) {
+          const token = btoa(unescape(encodeURIComponent(JSON.stringify({ u: workerBase, id: data.id }))));
+          link = `${base}#p=${encodeURIComponent(token)}`;
+        }
+      }
+    } catch (error) { /* fall through to the self-contained link */ }
+  }
+  const isShort = Boolean(link);
+  // Fallback: self-contained compressed link (works with no Worker).
+  if (!link) link = `${base}#plan=${encodeShare(shareSnapshot())}`;
   try {
     await navigator.clipboard.writeText(link);
-    alert("Share link copied. Send it to family — opening it loads this plan on their device.");
+    alert(isShort
+      ? "Short share link copied. Send it to family — opening it loads this plan, no setup."
+      : "Share link copied. (Set up the Worker to get tiny links.) Opening it loads this plan.");
   } catch {
     prompt("Copy this share link:", link);
   }
+}
+
+async function loadShortPlan(workerBase, id) {
+  sharedNotice = "Loading the shared plan…";
+  render();
+  try {
+    const res = await fetch(`${workerBase.replace(/\/+$/, "")}/load?id=${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error("status " + res.status);
+    const snapshot = await res.json();
+    sharedNotice = applySnapshot(snapshot)
+      ? "Loaded the shared itinerary from your link."
+      : "That shared link could not be read.";
+  } catch (error) {
+    sharedNotice = "Could not load the shared plan — the link may have expired.";
+  }
+  render();
 }
 
 // ---- Claude assistant (via serverless proxy) --------------------------
