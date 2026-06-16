@@ -88,6 +88,28 @@ export default {
       return json({ id }, 200, cors);
     }
 
+    // ---- Shared mutable plan: overwrite a fixed slug (family schedule) ------
+    if (path.endsWith("/put")) {
+      if (request.method !== "POST") return json({ error: "Use POST" }, 405, cors);
+      if (!env.TRIP_KV) return json({ error: "Worker missing TRIP_KV binding" }, 500, cors);
+      if (env.TRIP_PASSPHRASE && request.headers.get("x-trip-pass") !== env.TRIP_PASSPHRASE) {
+        return json({ error: "Bad or missing passphrase" }, 401, cors);
+      }
+      const putId = url.searchParams.get("id") || "";
+      if (!/^[a-z0-9]{4,16}$/.test(putId)) return json({ error: "Bad id" }, 400, cors);
+      let text;
+      try {
+        text = await request.text();
+        if (text.length > MAX_BODY_BYTES) return json({ error: "Plan too large" }, 413, cors);
+        const parsed = JSON.parse(text);
+        if (!parsed || !Array.isArray(parsed.i)) return json({ error: "Not a plan" }, 400, cors);
+      } catch {
+        return json({ error: "Invalid JSON" }, 400, cors);
+      }
+      await env.TRIP_KV.put(putId, text, { expirationTtl: PLAN_TTL_SECONDS });
+      return json({ id: putId, ok: true }, 200, cors);
+    }
+
     // ---- Claude assistant proxy (default) ----------------------------------
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, cors);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Worker missing ANTHROPIC_API_KEY secret" }, 500, cors);

@@ -590,6 +590,22 @@ async function copyInviteLink() {
   }
 }
 
+async function copyFamilyLink() {
+  if (!state.aiProxyUrl) {
+    alert("Connect the assistant first (Settings), then you can create the family link.");
+    return;
+  }
+  const dir = location.origin + location.pathname.replace(/[^/]*$/, "");
+  const token = btoa(unescape(encodeURIComponent(JSON.stringify({ u: state.aiProxyUrl, p: state.aiPass }))));
+  const link = `${dir}family.html#f=${encodeURIComponent(token)}`;
+  try {
+    await navigator.clipboard.writeText(link);
+    alert("Family schedule link copied. Send it to family — opening it shows the shared schedule and lets them change it just by asking Claude.");
+  } catch {
+    prompt("Copy this family schedule link (send privately):", link);
+  }
+}
+
 function openAssistant() {
   state.assistantOpen = true;
   state.assistantError = "";
@@ -806,8 +822,9 @@ function renderAssistantSettings() {
     ]),
     state.aiProxyUrl
       ? el("div", { class: "invite-block" }, [
-          el("p", { class: "muted small" }, ["Share access without setup: send family this link and the assistant connects on their device automatically."]),
-          el("button", { class: "ghost-btn", type: "button", onclick: copyInviteLink }, ["Copy invite link for family"])
+          el("p", { class: "muted small" }, ["Share access without setup: send family these links and they connect automatically."]),
+          el("button", { class: "ghost-btn", type: "button", onclick: copyFamilyLink }, ["Copy family schedule link"]),
+          el("button", { class: "ghost-btn", type: "button", onclick: copyInviteLink }, ["Copy assistant invite link"])
         ])
       : el("span")
   ]);

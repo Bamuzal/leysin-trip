@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f5132" />
+    <title>Leysin Trip · Ask Claude</title>
+    <style>
+      :root { color-scheme: light; --green:#0f5132; --line:#e2ddd1; --ink:#1b2a26; --muted:#6a766f; --paper:#fbf9f3; --card:#fff; --red:#b3261e; }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:var(--paper); color:var(--ink); }
+      header { position:sticky; top:0; background:var(--green); color:#fff; padding:14px 16px calc(14px + env(safe-area-inset-bottom,0)); }
+      header h1 { margin:0; font-size:18px; }
+      header p { margin:3px 0 0; font-size:12px; opacity:.85; }
+      .wrap { max-width:680px; margin:0 auto; padding:14px 14px 150px; }
+      .day { margin:18px 0 8px; font-size:13px; font-weight:800; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+      .item { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:11px 13px; margin-bottom:8px; }
+      .item .t { font-size:12px; font-weight:800; color:var(--green); }
+      .item .s { font-size:15px; font-weight:700; margin:2px 0; }
+      .item .n { font-size:13px; color:var(--muted); line-height:1.35; }
+      .empty { color:var(--muted); padding:24px 6px; text-align:center; }
+      .ask { position:fixed; left:0; right:0; bottom:0; background:rgba(251,249,243,.96); backdrop-filter:blur(6px); border-top:1px solid var(--line); padding:10px 12px calc(10px + env(safe-area-inset-bottom,0)); }
+      .ask-inner { max-width:680px; margin:0 auto; display:flex; gap:8px; align-items:flex-end; }
+      textarea { flex:1; resize:none; min-height:46px; max-height:120px; padding:11px 13px; border:1px solid var(--line); border-radius:12px; font:inherit; background:#fff; color:var(--ink); }
+      button { font:inherit; font-weight:800; border:0; border-radius:12px; padding:0 16px; min-height:46px; background:var(--green); color:#fff; }
+      button:disabled { opacity:.5; }
+      .note { max-width:680px; margin:0 auto 8px; font-size:13px; }
+      .reply { background:#eef6f0; border:1px solid #bfe0cc; color:#14402b; border-radius:10px; padding:9px 12px; }
+      .err { background:#fbeaea; border:1px solid #e6b3b0; color:var(--red); border-radius:10px; padding:9px 12px; }
+      .bar { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:6px; }
+      .link { background:none; color:#fff; min-height:auto; padding:4px 8px; border:1px solid rgba(255,255,255,.5); border-radius:8px; font-size:12px; font-weight:700; }
+      .thinking { color:var(--muted); font-size:13px; padding:2px 4px; }
+      .setup { max-width:520px; margin:40px auto; padding:0 18px; text-align:center; color:var(--muted); }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+    (function () {
+      var SLUG = "leysinfam";
+      var DAYS = {
+        "2026-06-20":"Sat Jun 20 · Arrival + orientation","2026-06-21":"Sun Jun 21 · Berneuse + Le Kuklos",
+        "2026-06-22":"Mon Jun 22 · Mountain biking","2026-06-23":"Tue Jun 23 · Three Towers / Lac d'Ai",
+        "2026-06-24":"Wed Jun 24 · Aigle Castle + wine","2026-06-25":"Thu Jun 25 · Lausanne city + lake",
+        "2026-06-26":"Fri Jun 26 · Recovery + local","2026-06-27":"Sat Jun 27 · Bigger mountain day",
+        "2026-06-28":"Sun Jun 28 · Montreux + Chillon","2026-06-29":"Mon Jun 29 · Lavaux + farewell",
+        "2026-06-30":"Tue Jun 30 · Departure"
+      };
+      // Default schedule used to seed the shared plan the first time it's opened.
+      var SEED = [
+        ["2026-06-20","15:00","17:00","Check in at Rte de la Mosse 2","Logistics","Confirm groceries, bags, and family timing.","planned"],
+        ["2026-06-20","17:15","18:00","Visit family at Rte des Corbelets 43","Logistics","Arrival-day family stop before dinner if energy allows.","planned"],
+        ["2026-06-20","18:30","20:15","Dinner at La Fromagerie","Dining","Reserve ahead for fondue/raclette. ~CHF 35-50 pp.","reserve"],
+        ["2026-06-20","20:30","22:00","Optional drinks at L'Embuscade","Bars","Easy first-night pub stop. ~CHF 10-25 pp.","optional"],
+        ["2026-06-21","10:00","13:00","Berneuse lift and Lac d'Ai walk","Hiking","Clear-weather day; check lift status. Leave 9:15 AM.","planned"],
+        ["2026-06-21","13:00","14:15","Lunch at Le Kuklos","Dining","Revolving mountain-view restaurant; reserve if possible. ~CHF 38-60 pp.","reserve"],
+        ["2026-06-21","18:30","20:00","Dinner at Creperie des Alpes","Dining","Casual recovery dinner. ~CHF 25-40 pp.","planned"],
+        ["2026-06-22","09:30","15:30","E-MTB scenic ride or Bike Park","Biking","Book bike/protection. Scenic route is moderate; bike park is technical.","reserve"],
+        ["2026-06-22","18:30","20:30","Dinner at Le QG","Dining","Casual bike-day dinner. ~CHF 25-40 pp.","planned"],
+        ["2026-06-23","08:45","14:30","Three Towers / Lac d'Ai hike","Hiking","Leave 8:45-9:00 AM; add 30 min for Corbelets pickup. Picnic lunch.","planned"],
+        ["2026-06-23","18:30","20:30","Dinner at La Ferme a Fredy","Dining","Traditional chalet dinner; reserve. ~CHF 45-65 pp.","reserve"],
+        ["2026-06-24","10:30","15:30","Aigle Castle + vineyard walk","Castles","Train day: old town, vineyards, wine museum. ~CHF 15+ entry.","planned"],
+        ["2026-06-24","12:30","13:45","Lunch in Aigle old town","Dining","Simple cafe or brasserie lunch. ~CHF 25-40 pp.","planned"],
+        ["2026-06-24","18:30","20:30","Dinner and drinks at Le QG","Dining","Casual Leysin dinner after Aigle. ~CHF 25-40 pp.","planned"],
+        ["2026-06-25","08:00","10:10","Train to Lausanne via Aigle","Logistics","Depart Mosse ~7:30 AM; connect through Aigle. Check SBB.","planned"],
+        ["2026-06-25","10:30","11:30","Lausanne Cathedral and old town","Activities","Esplanade views before dropping toward the lake.","planned"],
+        ["2026-06-25","12:00","13:15","Lunch at Cafe de Grancy","Dining","Historic station-adjacent brasserie; reserve. ~CHF 30-50 pp.","reserve"],
+        ["2026-06-25","13:45","15:15","Olympic Museum and Park","Activities","Museum and sculpture park in Ouchy. Paid entry.","planned"],
+        ["2026-06-25","15:15","16:30","Ouchy lakefront walk","Lake","Easy lakeside promenade.","planned"],
+        ["2026-06-25","18:15","20:00","Dinner at Brasserie de Montbenon","Dining","Seasonal brasserie; reserve. ~CHF 45-70 pp.","reserve"],
+        ["2026-06-25","20:15","21:30","Drinks at The Great Escape","Bars","Terrace/pub near Riponne. ~CHF 12-30 pp.","optional"],
+        ["2026-06-25","21:45","23:15","Train back to Leysin via Aigle","Logistics","Check the last comfortable connections.","planned"],
+        ["2026-06-26","10:30","15:30","Recovery day and family time","Activities","Village walk, sports center, pool, cafe, or an easy reset.","planned"],
+        ["2026-06-26","18:30","20:15","Dinner at La Calabre","Dining","Italian/pizza for the relaxed day. ~CHF 30-45 pp.","planned"],
+        ["2026-06-26","20:30","22:00","Drinks at L'Embuscade","Bars","Low-key local drinks. ~CHF 10-25 pp.","optional"],
+        ["2026-06-27","08:45","15:30","Bigger mountain day or second ride","Biking","Longer hike, via ferrata, or a second MTB day. Start 8:30-9 AM.","planned"],
+        ["2026-06-27","18:30","20:30","Dinner at Restaurant Le Leysin","Dining","Flexible bigger-day dinner. ~CHF 45-65 pp.","reserve"],
+        ["2026-06-28","10:00","16:30","Montreux and Chillon Castle","Castles","Lakefront walk plus castle. Leave 8:30-9 AM. ~CHF 15 entry.","planned"],
+        ["2026-06-28","12:45","14:00","Lunch on the Montreux lakefront","Dining","Lakeside cafe before/after Chillon. ~CHF 30-50 pp.","planned"],
+        ["2026-06-28","18:30","20:00","Light dinner in Leysin","Dining","Keep dinner easy after the lake day. ~CHF 25-40 pp.","planned"],
+        ["2026-06-29","10:30","17:00","Lavaux wine terraces","Wine","Book a tasting if possible. Leave ~8:30 AM. ~CHF 25-50 pp.","reserve"],
+        ["2026-06-29","18:45","21:00","Farewell dinner at La Ferme a Fredy","Dining","Farewell dinner; Le Kuklos is the alternate. ~CHF 45-65 pp.","reserve"],
+        ["2026-06-30","07:15","10:00","Transfer to Geneva Airport","Logistics","Leave 7:00-7:30 AM. Target GVA by 9:40-10:00 AM.","planned"]
+      ];
+
+      var $ = function (id) { return document.getElementById(id); };
+      var cfg = null, plan = null, busy = false, notice = null, noticeKind = "reply";
+
+      function uid() { return Date.now().toString(16) + Math.random().toString(16).slice(2, 8); }
+
+      function readCfg() {
+        var m = (location.hash || "").match(/[#&]f=([^&]+)/);
+        if (m) {
+          try {
+            var c = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1])))));
+            if (c && c.u) { localStorage.setItem("leysin_family_cfg", JSON.stringify(c)); cfg = c; }
+          } catch (e) {}
+          history.replaceState(null, "", location.pathname + location.search);
+        }
+        if (!cfg) { try { cfg = JSON.parse(localStorage.getItem("leysin_family_cfg") || "null"); } catch (e) {} }
+        return cfg;
+      }
+
+      function workerBase() { return (cfg.u || "").replace(/\/+$/, ""); }
+
+      function seedPlan() {
+        return { s: [], i: SEED.map(function (r) {
+          return { id: uid(), day: r[0], start: r[1], end: r[2], title: r[3], category: r[4], notes: r[5], status: r[6] };
+        }) };
+      }
+
+      async function loadPlan() {
+        try {
+          var res = await fetch(workerBase() + "/load?id=" + SLUG);
+          if (res.status === 404) { plan = seedPlan(); await savePlan(); return; }
+          if (!res.ok) throw new Error("load " + res.status);
+          plan = await res.json();
+          if (!plan || !Array.isArray(plan.i)) plan = seedPlan();
+          // make sure every item has an id
+          plan.i.forEach(function (e) { if (!e.id) e.id = uid(); });
+        } catch (e) {
+          notice = "Couldn't reach the trip server. Check your connection and reload."; noticeKind = "err";
+        }
+      }
+
+      async function savePlan() {
+        var res = await fetch(workerBase() + "/put?id=" + SLUG, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-trip-pass": cfg.p || "" },
+          body: JSON.stringify({ s: plan.s || [], i: plan.i })
+        });
+        if (!res.ok) throw new Error("save " + res.status + " " + (await res.text().catch(function () { return ""; })).slice(0, 120));
+      }
+
+      function systemPrompt() {
+        var items = plan.i.slice().sort(function (a, b) { return (a.day + a.start).localeCompare(b.day + b.start); })
+          .map(function (e) { return e.id + " | " + e.day + " " + e.start + "-" + e.end + " | " + e.title + " | " + e.category + " | " + e.status + (e.notes ? " | " + e.notes : ""); })
+          .join("\n");
+        return [
+          "You are the trip assistant for a family trip to Leysin, Switzerland, June 20-30 2026.",
+          'Reply with STRICT minified JSON only: {"reply": string, "actions": array}. No markdown.',
+          "'reply' = one short friendly sentence about what you changed (or an answer if no change).",
+          "Action shapes (apply immediately, no confirmation):",
+          '- add: {"op":"add","day":"2026-06-DD","start":"HH:MM","end":"HH:MM","title":str,"category":str,"notes":str,"status":str}',
+          '- update: {"op":"update","id":str,"fields":{...}}',
+          '- remove: {"op":"remove","id":str}',
+          '- move: {"op":"move","id":str,"day":str?,"start":str?,"end":str?}',
+          "Dates 2026-06-20..2026-06-30; times 24h HH:MM; status planned/reserve/booked/backup/optional.",
+          "Reference existing items by id. If only asked a question, return actions: [] and answer in reply.",
+          "", "CURRENT SCHEDULE (id | day time | title | category | status | notes):", items
+        ].join("\n");
+      }
+
+      function applyActions(actions) {
+        var n = 0;
+        (actions || []).forEach(function (a) {
+          if (!a || !a.op) return;
+          if (a.op === "add") {
+            plan.i.push({ id: uid(), day: a.day, start: a.start || "10:00", end: a.end || "11:00", title: a.title || "New item", category: a.category || "Custom", notes: a.notes || "", status: a.status || "planned" }); n++;
+          } else if (a.op === "update") {
+            var e = plan.i.find(function (x) { return x.id === a.id; });
+            if (e && a.fields) { ["day", "start", "end", "title", "category", "notes", "status"].forEach(function (k) { if (a.fields[k] !== undefined) e[k] = a.fields[k]; }); n++; }
+          } else if (a.op === "remove") {
+            var before = plan.i.length; plan.i = plan.i.filter(function (x) { return x.id !== a.id; }); if (plan.i.length < before) n++;
+          } else if (a.op === "move") {
+            var m = plan.i.find(function (x) { return x.id === a.id; });
+            if (m) { if (a.day) m.day = a.day; if (a.start) m.start = a.start; if (a.end) m.end = a.end; n++; }
+          }
+        });
+        return n;
+      }
+
+      function parseJson(raw) {
+        if (!raw) return null;
+        var t = String(raw).trim();
+        var fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i); if (fence) t = fence[1].trim();
+        var a = t.indexOf("{"), b = t.lastIndexOf("}"); if (a < 0 || b <= a) return null;
+        try { return JSON.parse(t.slice(a, b + 1)); } catch (e) { return null; }
+      }
+
+      async function ask(text) {
+        if (!text.trim() || busy) return;
+        busy = true; notice = null; render();
+        try {
+          var res = await fetch(workerBase(), {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-trip-pass": cfg.p || "" },
+            body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1024, system: systemPrompt(), messages: [{ role: "user", content: text }] })
+          });
+          if (!res.ok) throw new Error("Assistant error " + res.status + ". " + (await res.text().catch(function () { return ""; })).slice(0, 140));
+          var data = await res.json();
+          var rawText = (data.content || []).filter(function (b) { return b.type === "text"; }).map(function (b) { return b.text; }).join("\n");
+          var parsed = parseJson(rawText);
+          if (parsed && Array.isArray(parsed.actions) && parsed.actions.length) {
+            applyActions(parsed.actions);
+            await savePlan();
+            notice = parsed.reply || "Updated the schedule."; noticeKind = "reply";
+          } else {
+            notice = (parsed && parsed.reply) || rawText || "No change made."; noticeKind = "reply";
+          }
+        } catch (e) {
+          notice = String(e.message || e); noticeKind = "err";
+        }
+        busy = false; render();
+      }
+
+      function el(tag, attrs, kids) {
+        var n = document.createElement(tag);
+        for (var k in (attrs || {})) { if (k === "class") n.className = attrs[k]; else if (k === "html") n.innerHTML = attrs[k]; else if (k.slice(0, 2) === "on") n.addEventListener(k.slice(2), attrs[k]); else n.setAttribute(k, attrs[k]); }
+        (kids || []).forEach(function (c) { n.append(c && c.nodeType ? c : document.createTextNode(c)); });
+        return n;
+      }
+
+      function render() {
+        var root = $("root"); root.innerHTML = "";
+        if (!cfg || !cfg.u) {
+          root.append(el("div", { class: "setup" }, ["Open the family link from the Leysin Trip planner to connect this page to your shared schedule."]));
+          return;
+        }
+        root.append(el("header", {}, [
+          el("h1", {}, ["Leysin Trip · Ask Claude"]),
+          el("p", {}, ["Type a change below. It updates the shared family schedule for everyone."]),
+          el("div", { class: "bar" }, [
+            el("span", { html: "&nbsp;" }, []),
+            el("button", { class: "link", onclick: refresh }, ["Refresh"])
+          ])
+        ]));
+        var wrap = el("div", { class: "wrap" }, []);
+        if (!plan) {
+          wrap.append(el("div", { class: "empty" }, ["Loading the schedule…"]));
+        } else {
+          var byDay = {};
+          plan.i.slice().sort(function (a, b) { return (a.day + a.start).localeCompare(b.day + b.start); }).forEach(function (e) { (byDay[e.day] = byDay[e.day] || []).push(e); });
+          var days = Object.keys(byDay).sort();
+          if (!days.length) wrap.append(el("div", { class: "empty" }, ["No items yet — ask Claude to add something."]));
+          days.forEach(function (d) {
+            wrap.append(el("div", { class: "day" }, [DAYS[d] || d]));
+            byDay[d].forEach(function (e) {
+              wrap.append(el("div", { class: "item" }, [
+                el("div", { class: "t" }, [e.start + "–" + e.end + (e.status && e.status !== "planned" ? " · " + e.status : "")]),
+                el("div", { class: "s" }, [e.title]),
+                e.notes ? el("div", { class: "n" }, [e.notes]) : el("span")
+              ]));
+            });
+          });
+        }
+        root.append(wrap);
+        var askInner = el("div", { class: "ask" }, []);
+        if (notice) askInner.append(el("div", { class: "note " + (noticeKind === "err" ? "err" : "reply") }, [notice]));
+        if (busy) askInner.append(el("div", { class: "note thinking" }, ["Claude is updating the schedule…"]));
+        var ta = el("textarea", { placeholder: "e.g. Move the June 22 dinner to 8pm", "aria-label": "Ask Claude" }, []);
+        ta.addEventListener("keydown", function (ev) { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); var v = ta.value; ta.value = ""; ask(v); } });
+        var send = el("button", { onclick: function () { var v = ta.value; ta.value = ""; ask(v); } }, ["Send"]);
+        if (busy) { ta.setAttribute("disabled", "disabled"); send.setAttribute("disabled", "disabled"); }
+        askInner.append(el("div", { class: "ask-inner" }, [ta, send]));
+        root.append(askInner);
+      }
+
+      async function refresh() { notice = null; render(); await loadPlan(); render(); }
+
+      async function start() {
+        readCfg();
+        render();
+        if (cfg && cfg.u) { await loadPlan(); render(); }
+      }
+      start();
+    })();
+    </script>
+  </body>
+</html>
